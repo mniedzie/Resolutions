@@ -1,0 +1,10 @@
+*.root
+*.pdf
+*.x
+*.X
+*.o
+*.swp
+*.d
+*.so
+*.swo
+*.swn
