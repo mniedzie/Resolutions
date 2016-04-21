@@ -21,9 +21,15 @@ int main()
  	FILE *input;
 	char filename[300];
 
-	int i = 0;
+	int i = 7;
 
 	TString filenames [] = {"../lists/file_list_25ns_76X.txt",
+									"../lists/file_list_25ns_76X1.txt",
+									"../lists/file_list_25ns_76X2.txt",
+									"../lists/file_list_25ns_76X3.txt",
+									"../lists/file_list_25ns_76X4.txt",
+									"../lists/file_list_25ns_76X5.txt",
+									"../lists/file_list_25ns_76X6.txt",
 									"../lists/file_list_25ns_76X_test.txt",
 									"../lists/ptbinned/file_list_5to10_76X.txt",
 									"../lists/ptbinned/file_list_10to15_76X.txt",

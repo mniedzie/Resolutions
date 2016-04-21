@@ -27,12 +27,15 @@
 #include <TH2.h>
 #include <TStyle.h>
 #include <TLorentzVector.h>
+#include <TRandom3.h>
 #include "MyJet.h"
 
 bool sortFunct( MyJet a, MyJet b) { return ( a.Pt() > b.Pt() ); }
 
 void MySelector::BuildEvent() 
 {		//here I prepare vectors of reco and gen jets which I will later use
+
+	gRandom = new TRandom3();
 
 	int JetsNum = p4_;
 	int GenJetsNum = gen_p4_;
@@ -49,6 +52,63 @@ void MySelector::BuildEvent()
       MyJet genjet( gen_p4_fCoordinates_fPt[i], gen_p4_fCoordinates_fEta[i], gen_p4_fCoordinates_fPhi[i], gen_p4_fCoordinates_fE[i]);
       GenJets.push_back(genjet);
    }
+
+   SmearedJets.clear();
+	for( int i = 0; ( i < Jets.size() && i < GenJets.size() && i < 3 ) ; i++ ){
+		double scale, JER;
+		JER = 0.;
+
+		// I find scale factor for i-th jet
+
+		for( int k = 0; k < scalefactors.size(); k++ ){
+			if( Jets[i].Eta() > scalefactors[k][0] && Jets[i].Eta() <= scalefactors[k][1] ){
+				scale = scalefactors[k][3];
+				break;
+			}
+			scale = 1.;
+		}
+
+		// for matched jets I do the scaling using scale factor.
+		// if eta > 4.7 then simply copied jet.
+
+		if( Jets[i].DeltaR(GenJets[i]) < 0.2 ){		
+																	
+			double scaled_pt = GenJets.at(i).Pt()+scale*(Jets.at(i).Pt()-GenJets.at(i).Pt()) ;
+			if (scaled_pt < 0) scaled_pt = 0.;
+			MyJet temp_jet( scaled_pt, Jets.at(i).Eta(), Jets.at(i).Phi(), Jets.at(i).E() );
+			SmearedJets.push_back(temp_jet);
+		}
+
+		// if the jet is unmatched, we smear it!
+
+		else{
+			for ( int j = 0; j < resolutions.size(); j++ ){
+				if( ( Jets.at(i).Eta() > resolutions.at(j).at(0) ) && ( Jets.at(i).Eta() <= resolutions.at(j).at(1) ) && ( rho > resolutions.at(j).at(2) ) && ( rho <= resolutions.at(j).at(3) ) ){
+					double par_a, par_b, par_c, par_d;
+					par_a = resolutions.at(j).at(7);
+					par_b = resolutions.at(j).at(8);
+					par_c = resolutions.at(j).at(9);
+					par_d = resolutions.at(j).at(10);
+					JER = TMath::Sqrt(par_a*TMath::Abs(par_a)/(Jets.at(i).Pt()*Jets.at(i).Pt())+par_b*par_b*pow(Jets.at(i).Pt(),par_d)+par_c*par_c) ;
+					break;
+				}
+				if ( j == resolutions.size() ){
+					std::cout << "out of jer ranges" << std::endl;
+				}
+			}
+
+			unmachedJets++;
+
+			Double_t smeared_pt = gRandom->TRandom::Gaus( Jets.at(i).Pt(), JER );
+//			std::cout << " original and smeared pt : " << Jets.at(i).Pt() << ", " << smeared_pt << std::endl;
+
+			MyJet temp_jet( smeared_pt, Jets.at(i).Eta(), Jets.at(i).Phi(), Jets.at(i).E() );
+			SmearedJets.push_back(temp_jet);
+		}
+
+//		std::cout << " jets eta phi and E : " << Jets.at(i).Eta() << ", " << Jets.at(i).Phi() << ", " << Jets.at(i).E() << std::endl;
+//		std::cout << " jets eta phi and E : " << SmearedJets.at(i).Eta() << ", " << SmearedJets.at(i).Phi() << ", " << SmearedJets.at(i).E() << std::endl;
+	}
 
 }
 
@@ -346,8 +406,14 @@ Bool_t MySelector::Process(Long64_t entry)
 
 	MakeWeight();
 
-	int JetsNum = p4_;
+	int RecoJetsNum = p4_;
+	int SmearJetsNum = SmearedJets.size();
 	int GenJetsNum = gen_p4_;
+	int JetsNum = SmearJetsNum;
+
+	std::vector<MyJet> JetPointer;
+	
+	JetPointer = SmearedJets;
 
 	int p_bins [] = { 55, 77, 99, 165, 231, 298, 365, 451, 561, 1500 };
 	int p_bins_FT [] = { 77, 99, 121, 187, 253, 342, 1500 };
@@ -388,10 +454,10 @@ Bool_t MySelector::Process(Long64_t entry)
 
 	if ( JetsNum > 1 )
 	{
-		if ( JetsNum > 2 && Jets[2].Pt() > 10 )
+		if ( JetsNum > 2 && JetPointer[2].Pt() > 10 )
 		{
-			complete =  2 * Jets[2].Pt()/( Jets[0].Pt() + Jets[1].Pt() );
-			parallel = (2*Jets[2]*(Jets[0]-Jets[1]))/((Jets[0]-Jets[1]).Pt()*( Jets[0].Pt() + Jets[1].Pt() ));
+			complete =  2 * JetPointer[2].Pt()/( JetPointer[0].Pt() + JetPointer[1].Pt() );
+			parallel = (2*JetPointer[2]*(JetPointer[0]-JetPointer[1]))/((JetPointer[0]-JetPointer[1]).Pt()*( JetPointer[0].Pt() + JetPointer[1].Pt() ));
 			perpendicular = TMath::Sqrt( TMath::Power( complete, 2 ) - TMath::Power( parallel, 2) );
 		}
 		else
@@ -405,33 +471,33 @@ Bool_t MySelector::Process(Long64_t entry)
 		if (flag1 == 1 ) alpha = TMath::Abs(parallel);
 		if (flag1 == 2 ) alpha = TMath::Abs(perpendicular);
 
-		if ( TMath::Abs(Jets[0].DeltaPhi( Jets[1] )) > 2.7 && Jets[0].Pt() < 2*pthat )
+		if ( TMath::Abs(JetPointer[0].DeltaPhi( JetPointer[1] )) > 2.7 && JetPointer[0].Pt() < 2*pthat )
 		{
 		// I fill alpha_max histograms
 			for ( int k = 0 ; k < PtBinsNo ; k++ )
 			{
-				if ( ( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ) < p_bins[ k + 1 ] ) &&
-						( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ) > p_bins[ k ] ) )
+				if ( ( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ) < p_bins[ k + 1 ] ) &&
+						( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ) > p_bins[ k ] ) )
 				{
 					for ( int r = 0 ; r < EtaBinsNo ; r++ )
 					{
-						if (TMath::Abs( Jets[1].Eta() ) > eta_bins[r] && 
-							TMath::Abs( Jets[1].Eta() ) < eta_bins[r+1] && 
-							TMath::Abs( Jets[0].Eta() ) > eta_bins[r] && 
-							TMath::Abs( Jets[0].Eta() ) < eta_bins[r+1] )
+						if (TMath::Abs( JetPointer[1].Eta() ) > eta_bins[r] && 
+							TMath::Abs( JetPointer[1].Eta() ) < eta_bins[r+1] && 
+							TMath::Abs( JetPointer[0].Eta() ) > eta_bins[r] && 
+							TMath::Abs( JetPointer[0].Eta() ) < eta_bins[r+1] )
 						{
 							for ( int m = 0 ; m < 5 ; m++ )
 							{
 								if ( alpha < alpha_bins[ m+1 ] )
 								{
-									asymmetries_all.at(r).at(k).at(m) -> Fill( ( Jets[0].Pt() - Jets[1].Pt() )/( Jets[0].Pt() + Jets[1].Pt() ) , weight );
-									asymmetries_pt_all.at(r).at(k).at(m) -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
+									asymmetries_all.at(r).at(k).at(m) -> Fill( ( JetPointer[0].Pt() - JetPointer[1].Pt() )/( JetPointer[0].Pt() + JetPointer[1].Pt() ) , weight );
+									asymmetries_pt_all.at(r).at(k).at(m) -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
 									if ( m == 4 )
 									{
-										h_JetAvePt -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
-										h_Jet1Pt -> Fill( Jets[0].Pt(), weight );
-										h_Jet2Pt -> Fill( Jets[1].Pt(), weight );
-										h_Jet3Pt -> Fill( Jets[2].Pt(), weight );
+										h_JetAvePt -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
+										h_Jet1Pt -> Fill( JetPointer[0].Pt(), weight );
+										h_Jet2Pt -> Fill( JetPointer[1].Pt(), weight );
+										h_Jet3Pt -> Fill( JetPointer[2].Pt(), weight );
 									}
 									if ( excl_bin ) break;
 								}
@@ -440,27 +506,27 @@ Bool_t MySelector::Process(Long64_t entry)
 					}
 					for ( int r = 0 ; r < EtaFtControlBinsNo ; r++ )
 					{
-						if ((TMath::Abs( Jets[1].Eta() ) > 0. && 
-							TMath::Abs( Jets[1].Eta() ) < 1.3 && 
-							TMath::Abs( Jets[0].Eta() ) > eta_bins_control[r] && 
-							TMath::Abs( Jets[0].Eta() ) < eta_bins_control[r+1]) || 
-							(TMath::Abs( Jets[0].Eta() ) > 0. && 
-							TMath::Abs( Jets[0].Eta() ) < 1.3 && 
-							TMath::Abs( Jets[1].Eta() ) > eta_bins_control[r] && 
-							TMath::Abs( Jets[1].Eta() ) < eta_bins_control[r+1]) )
+						if ((TMath::Abs( JetPointer[1].Eta() ) > 0. && 
+							TMath::Abs( JetPointer[1].Eta() ) < 1.3 && 
+							TMath::Abs( JetPointer[0].Eta() ) > eta_bins_control[r] && 
+							TMath::Abs( JetPointer[0].Eta() ) < eta_bins_control[r+1]) || 
+							(TMath::Abs( JetPointer[0].Eta() ) > 0. && 
+							TMath::Abs( JetPointer[0].Eta() ) < 1.3 && 
+							TMath::Abs( JetPointer[1].Eta() ) > eta_bins_control[r] && 
+							TMath::Abs( JetPointer[1].Eta() ) < eta_bins_control[r+1]) )
 						{
 							for ( int m = 0 ; m < 5 ; m++ )
 							{
 								if ( alpha < alpha_bins[ m+1 ] )
 								{
-									forward_hist_dijet.at(r).at(k).at(m) -> Fill( TMath::Abs(( Jets[0].Pt() - Jets[1].Pt() )/( Jets[0].Pt() + Jets[1].Pt() )) , weight );
-									forward_pt_hist_dijet.at(r).at(k).at(m) -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
+									forward_hist_dijet.at(r).at(k).at(m) -> Fill( TMath::Abs(( JetPointer[0].Pt() - JetPointer[1].Pt() )/( JetPointer[0].Pt() + JetPointer[1].Pt() )) , weight );
+									forward_pt_hist_dijet.at(r).at(k).at(m) -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
 									if ( m == 4 )
 									{
-										h_FEJetAvePt -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
-										h_FEJet1Pt -> Fill( Jets[0].Pt(), weight );
-										h_FEJet2Pt -> Fill( Jets[1].Pt(), weight );
-										h_FEJet3Pt -> Fill( Jets[2].Pt(), weight );
+										h_FEJetAvePt -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
+										h_FEJet1Pt -> Fill( JetPointer[0].Pt(), weight );
+										h_FEJet2Pt -> Fill( JetPointer[1].Pt(), weight );
+										h_FEJet3Pt -> Fill( JetPointer[2].Pt(), weight );
 									}
 									if ( excl_bin ) break;
 								}
@@ -472,32 +538,32 @@ Bool_t MySelector::Process(Long64_t entry)
 			}
 			for ( int k = 0 ; k < PtFTBinsNo ; k++ )
 			{
-				if ( ( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ) < p_bins_FT[ k + 1 ] ) &&
-						( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ) > p_bins_FT[ k ] ) )
+				if ( ( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ) < p_bins_FT[ k + 1 ] ) &&
+						( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ) > p_bins_FT[ k ] ) )
 				{
 					for ( int r = 0 ; r < EtaFtBinsNo ; r++ )
 					{
-						if ((TMath::Abs( Jets[1].Eta() ) > 0. && 
-							TMath::Abs( Jets[1].Eta() ) < 1.3 && 
-							TMath::Abs( Jets[0].Eta() ) > eta_ref_down[r] && 
-							TMath::Abs( Jets[0].Eta() ) < eta_ref_up[r]) || 
-							(TMath::Abs( Jets[0].Eta() ) > 0. && 
-							TMath::Abs( Jets[0].Eta() ) < 1.3 && 
-							TMath::Abs( Jets[1].Eta() ) > eta_ref_down[r] && 
-							TMath::Abs( Jets[1].Eta() ) < eta_ref_up[r]) )
+						if ((TMath::Abs( JetPointer[1].Eta() ) > 0. && 
+							TMath::Abs( JetPointer[1].Eta() ) < 1.3 && 
+							TMath::Abs( JetPointer[0].Eta() ) > eta_ref_down[r] && 
+							TMath::Abs( JetPointer[0].Eta() ) < eta_ref_up[r]) || 
+							(TMath::Abs( JetPointer[0].Eta() ) > 0. && 
+							TMath::Abs( JetPointer[0].Eta() ) < 1.3 && 
+							TMath::Abs( JetPointer[1].Eta() ) > eta_ref_down[r] && 
+							TMath::Abs( JetPointer[1].Eta() ) < eta_ref_up[r]) )
 						{
 							for ( int m = 0 ; m < 5 ; m++ )
 							{
 								if ( alpha < alpha_bins[ m+1 ] )
 								{
-									forward_hist.at(r).at(k).at(m) -> Fill( TMath::Abs(( Jets[0].Pt() - Jets[1].Pt() )/( Jets[0].Pt() + Jets[1].Pt() )) , weight );
-									forward_pt_hist.at(r).at(k).at(m) -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
+									forward_hist.at(r).at(k).at(m) -> Fill( TMath::Abs(( JetPointer[0].Pt() - JetPointer[1].Pt() )/( JetPointer[0].Pt() + JetPointer[1].Pt() )) , weight );
+									forward_pt_hist.at(r).at(k).at(m) -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
 									if ( m == 4 )
 									{
-										h_FEJetAvePt -> Fill( 0.5 * ( Jets[0].Pt() + Jets[1].Pt() ), weight );
-										h_FEJet1Pt -> Fill( Jets[0].Pt(), weight );
-										h_FEJet2Pt -> Fill( Jets[1].Pt(), weight );
-										h_FEJet3Pt -> Fill( Jets[2].Pt(), weight );
+										h_FEJetAvePt -> Fill( 0.5 * ( JetPointer[0].Pt() + JetPointer[1].Pt() ), weight );
+										h_FEJet1Pt -> Fill( JetPointer[0].Pt(), weight );
+										h_FEJet2Pt -> Fill( JetPointer[1].Pt(), weight );
+										h_FEJet3Pt -> Fill( JetPointer[2].Pt(), weight );
 									}
 									if ( excl_bin ) break;
 								}
